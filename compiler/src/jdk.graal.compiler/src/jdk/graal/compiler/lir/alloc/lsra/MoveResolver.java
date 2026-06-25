@@ -41,6 +41,8 @@ import jdk.graal.compiler.debug.CounterKey;
 import jdk.graal.compiler.debug.DebugContext;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.debug.Indent;
+import jdk.graal.compiler.graph.NodeSourcePosition;
+
 
 import jdk.vm.ci.meta.AllocatableValue;
 import jdk.vm.ci.meta.Constant;
@@ -69,6 +71,7 @@ public class MoveResolver {
     private final ArrayList<Interval> mappingFrom;
     private final ArrayList<Constant> mappingFromOpr;
     private final ArrayList<Interval> mappingTo;
+    private final ArrayList<NodeSourcePosition> mappingPos;
     private boolean multipleReadsAllowed;
     private final int[] registerBlocked;
 
@@ -120,6 +123,7 @@ public class MoveResolver {
         this.insertionBuffer = new LIRInsertionBuffer();
         this.registerBlocked = new int[allocator.getRegisters().size()];
         this.res = allocator.getLIRGenerationResult();
+        this.mappingPos = new ArrayList<>();
     }
 
     protected boolean checkEmpty() {
@@ -275,12 +279,15 @@ public class MoveResolver {
         insertIdx = -1;
     }
 
-    private LIRInstruction insertMove(Interval fromInterval, Interval toInterval) {
+    private LIRInstruction insertMove(Interval fromInterval, Interval toInterval, NodeSourcePosition pos) {
         assert !fromInterval.operand.equals(toInterval.operand) : "from and to interval equal: " + fromInterval;
         assert LIRKind.verifyMoveKinds(toInterval.kind(), fromInterval.kind(), allocator.getRegisterAllocationConfig()) : "move between different types";
         assert insertIdx != -1 : "must setup insert position first";
 
         LIRInstruction move = createMove(fromInterval.operand, toInterval.operand, fromInterval.location(), toInterval.location());
+        if(pos!=null){
+            move.setPosition(pos);
+        }
         insertionBuffer.append(insertIdx, move);
 
         DebugContext debug = allocator.getDebug();
@@ -301,7 +308,7 @@ public class MoveResolver {
         return getAllocator().getSpillMoveFactory().createMove(toOpr, fromOpr);
     }
 
-    private LIRInstruction insertMove(Constant fromOpr, Interval toInterval) {
+    private LIRInstruction insertMove(Constant fromOpr, Interval toInterval, NodeSourcePosition pos) {
         assert insertIdx != -1 : "must setup insert position first";
 
         AllocatableValue toOpr = toInterval.operand;
@@ -310,6 +317,9 @@ public class MoveResolver {
             move = getAllocator().getSpillMoveFactory().createStackLoad(toOpr, fromOpr);
         } else {
             move = getAllocator().getSpillMoveFactory().createLoad(toOpr, fromOpr);
+        }
+        if(pos!=null){
+            move.setPosition(pos);
         }
         insertionBuffer.append(insertIdx, move);
 
@@ -348,15 +358,16 @@ public class MoveResolver {
                 for (i = mappingFrom.size() - 1; i >= 0; i--) {
                     Interval fromInterval = mappingFrom.get(i);
                     Interval toInterval = mappingTo.get(i);
+                    NodeSourcePosition pos = mappingPos.get(i);
 
                     if (safeToProcessMove(fromInterval, toInterval)) {
                         // this interval can be processed because target is free
                         final LIRInstruction move;
                         if (fromInterval != null) {
-                            move = insertMove(fromInterval, toInterval);
+                            move = insertMove(fromInterval, toInterval, pos);
                             unblockRegisters(fromInterval);
                         } else {
-                            move = insertMove(mappingFromOpr.get(i), toInterval);
+                            move = insertMove(mappingFromOpr.get(i), toInterval, pos);
                         }
                         move.setComment(res, "MoveResolver resolve mapping");
                         if (LIRValueUtil.isStackSlotValue(toInterval.location())) {
@@ -368,6 +379,7 @@ public class MoveResolver {
                         mappingFrom.remove(i);
                         mappingFromOpr.remove(i);
                         mappingTo.remove(i);
+                        mappingPos.remove(i);
 
                         processedInterval = true;
                     } else if (fromInterval != null && isRegister(fromInterval.location()) &&
@@ -429,7 +441,8 @@ public class MoveResolver {
         blockRegisters(spillInterval);
 
         // insert a move from register to stack and update the mapping
-        LIRInstruction move = insertMove(fromInterval, spillInterval);
+        NodeSourcePosition pos = mappingPos.get(spillCandidate);
+        LIRInstruction move = insertMove(fromInterval, spillInterval, pos);
         mappingFrom.set(spillCandidate, spillInterval);
         unblockRegisters(fromInterval);
         move.setComment(res, "MoveResolver break cycle");
@@ -477,7 +490,7 @@ public class MoveResolver {
         this.insertIdx = newInsertIdx;
     }
 
-    public void addMapping(Interval fromInterval, Interval toInterval) {
+    public void addMapping(Interval fromInterval, Interval toInterval, NodeSourcePosition pos) {
         DebugContext debug = allocator.getDebug();
         if (isIllegal(toInterval.location()) && toInterval.canMaterialize()) {
             if (debug.isLogEnabled()) {
@@ -488,7 +501,7 @@ public class MoveResolver {
         if (isIllegal(fromInterval.location()) && fromInterval.canMaterialize()) {
             // Instead of a reload, re-materialize the value
             Constant rematValue = fromInterval.getMaterializedValue();
-            addMapping(rematValue, toInterval);
+            addMapping(rematValue, toInterval, pos);
             return;
         }
         if (debug.isLogEnabled()) {
@@ -502,9 +515,10 @@ public class MoveResolver {
         mappingFrom.add(fromInterval);
         mappingFromOpr.add(null);
         mappingTo.add(toInterval);
+        mappingPos.add(pos);
     }
 
-    public void addMapping(Constant fromOpr, Interval toInterval) {
+    public void addMapping(Constant fromOpr, Interval toInterval, NodeSourcePosition pos) {
         DebugContext debug = allocator.getDebug();
         if (debug.isLogEnabled()) {
             debug.log("add move mapping from %s to %s", fromOpr, toInterval);
@@ -513,6 +527,7 @@ public class MoveResolver {
         mappingFrom.add(null);
         mappingFromOpr.add(fromOpr);
         mappingTo.add(toInterval);
+        mappingPos.add(pos);
     }
 
     void resolveAndAppendMoves() {

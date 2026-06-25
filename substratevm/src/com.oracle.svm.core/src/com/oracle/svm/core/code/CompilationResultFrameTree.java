@@ -494,10 +494,43 @@ public final class CompilationResultFrameTree {
                     }
                 }
                 if (useSourceMappings) {
-                    for (SourceMapping sourceMapping : sourceMappings) {
-                        SourceMappingWrapper wrapper = SourceMappingWrapper.create(sourceMapping, maxDepth);
-                        if (wrapper != null) {
-                            if (wrapper.getStartOffset() > targetCodeSize - 1) {
+                    Path path = Paths.get("source_mapping.txt");
+
+                    try (BufferedWriter writer = Files.newBufferedWriter(path,
+                            StandardOpenOption.CREATE,
+                            StandardOpenOption.APPEND)) {
+
+                        for (SourceMapping sourceMapping : sourceMappings) {
+                            StringBuilder sb = new StringBuilder();
+                            for (int i = sourceMapping.getStartOffset(); i < sourceMapping.getEndOffset(); i++) {
+                                int b = compilationResult.getTargetCode()[i] & 0xFF;
+                                sb.append(String.format("%02x", b));
+                                sb.append(" ");
+                            }
+                            if(sb.isEmpty()){
+                                continue;
+                            }
+                            writer.write(String.format("%d - %d", sourceMapping.getStartOffset(), sourceMapping.getEndOffset()));
+                            writer.write(",");
+                            writer.write(sb.toString());
+                            writer.write(",");
+                            writer.write(sourceMapping.getSourcePosition().rawToString());
+                            writer.write(",");
+                            writer.write(sourceMapping.getSourcePosition().getMethod().toString());
+                            writer.newLine();
+
+
+//                        System.out.println(sourceMapping.getStartOffset() + " " + sourceMapping.getEndOffset());
+                            SourceMappingWrapper wrapper = SourceMappingWrapper.create(sourceMapping, maxDepth);
+                            if (wrapper != null) {
+                                if (wrapper.getStartOffset() > targetCodeSize - 1) {
+                                    if (debug.isLogEnabled(DebugContext.DETAILED_LEVEL)) {
+                                        debug.log(" Discard SourceMapping outside code-range %s", SourceMappingWrapper.getSourceMappingString(sourceMapping));
+                                    }
+                                    continue;
+                                }
+                                sourcePosData.add(wrapper);
+                            } else {
                                 if (debug.isLogEnabled(DebugContext.DETAILED_LEVEL)) {
                                     debug.log(" Discard SourceMapping outside code-range %s", SourceMappingWrapper.getSourceMappingString(sourceMapping));
                                 }

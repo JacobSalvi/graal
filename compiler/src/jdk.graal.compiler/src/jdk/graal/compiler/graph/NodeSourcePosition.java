@@ -238,6 +238,29 @@ public class NodeSourcePosition extends BytecodePosition implements Iterable<Nod
         return sb.toString();
     }
 
+    public String rawToString(){
+        StringBuilder sb = new StringBuilder(100);
+        NodeSourcePosition pos = this;
+        while (pos != null) {
+            var a = pos.getMethod().asStackTraceElement(pos.getBCI());
+            sb.append(String.format("%s [%s] [%s %d] [bci: %d]", pos.getMethod(),
+                    pos.getMethod().getSignature(),
+                    a.getFileName(),
+                    a.getLineNumber(),
+                    pos.getBCI()));
+            // format(sb, pos);
+            if (pos.sourceLanguagePosition != null) {
+                sb.append(" source=" + pos.sourceLanguagePosition.toShortString());
+            }
+            pos = pos.getCaller();
+            if (pos != null) {
+                sb.append(",");
+            }
+        }
+        return sb.toString();
+
+    }
+
     private static void format(StringBuilder sb, NodeSourcePosition pos) {
         MetaUtil.appendLocation(sb.append("at "), pos.getMethod(), pos.getBCI());
         if (pos.marker != None) {

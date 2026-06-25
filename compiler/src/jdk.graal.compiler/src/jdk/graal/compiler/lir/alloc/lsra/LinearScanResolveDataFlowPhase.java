@@ -76,8 +76,12 @@ public class LinearScanResolveDataFlowPhase extends LinearScanAllocationPhase {
             Interval toInterval = allocator.splitChildAtOpId(allocator.intervalFor(operandNum), toBlockFirstInstructionId, LIRInstruction.OperandMode.DEF);
 
             if (fromInterval != toInterval && !fromInterval.location().equals(toInterval.location())) {
+                ArrayList<LIRInstruction> instructions = allocator.getLIR().getLIRforBlock(fromBlock);
+                LIRInstruction lastInstr = instructions.get(instructions.size() - 1);
+                jdk.graal.compiler.graph.NodeSourcePosition pos = lastInstr.getPosition();
+
                 // need to insert move instruction
-                moveResolver.addMapping(fromInterval, toInterval);
+                moveResolver.addMapping(fromInterval, toInterval, pos);
             }
         }
     }

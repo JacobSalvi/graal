@@ -39,6 +39,7 @@ import java.util.List;
 import org.graalvm.collections.EconomicMap;
 import org.graalvm.collections.UnmodifiableMapCursor;
 
+import jdk.graal.compiler.code.SourceMapping;
 import jdk.graal.compiler.core.common.LIRKind;
 import jdk.graal.compiler.core.common.calc.Condition;
 import jdk.graal.compiler.core.common.cfg.BasicBlock;
@@ -325,22 +326,38 @@ public abstract class NodeLIRBuilder implements NodeLIRBuilderTool, LIRGeneratio
         for (PhiNode phi : merge.valuePhis()) {
             ValueNode node = phi.valueAt(pred);
             Value value = operand(node);
+
+            NodeSourcePosition pos = node.getNodeSourcePosition();
             assert value != null;
             if (isRegister(value)) {
                 /*
                  * Fixed register intervals are not allowed at block boundaries so we introduce a
                  * new Variable.
                  */
+                NodeSourcePosition oldPos = gen.currentPosition;
+                gen.setSourcePosition(pos);
                 value = gen.emitMove(value);
+                gen.setSourcePosition(oldPos);
             } else if (node.isConstant() && !gen.getSpillMoveFactory().allowConstantToStackMove(node.asConstant()) && !LIRKind.isValue(value)) {
                 /*
                  * Some constants are not allowed as inputs for PHIs in certain backends. Explicitly
                  * create a copy of this value to force it into a register. The new variable is only
                  * used in the PHI.
                  */
+                NodeSourcePosition oldPos = gen.currentPosition;
+                gen.setSourcePosition(pos);
                 Variable result = gen.newVariable(value.getValueKind());
                 gen.emitMove(result, value);
                 value = result;
+                gen.setSourcePosition(oldPos);
+            }else if(pos != null){
+                // It would make sense for the instructions produced by this node to be
+                // connected to its node source position.
+                NodeSourcePosition oldPos = gen.currentPosition;
+                gen.setSourcePosition(pos);
+                Variable move = gen.emitMove(value);
+                value = move;
+                gen.setSourcePosition(oldPos);
             }
             values.add(value);
         }
@@ -561,7 +578,16 @@ public abstract class NodeLIRBuilder implements NodeLIRBuilderTool, LIRGeneratio
     public void visitEndNode(AbstractEndNode end) {
         AbstractMergeNode merge = end.merge();
         JumpOp jump = new JumpOp(getLIRBlock(merge), end instanceof LoopEndNode loopEndNode && loopEndNode.loopBegin().mayEmitThreadedCode());
-        jump.setPhiValues(createPhiOut(merge, end));
+        Value[] values = createPhiOut(merge, end);
+
+        NodeSourcePosition[] positions = new NodeSourcePosition[values.length];
+        int i = 0;
+        for (PhiNode phi : merge.valuePhis()) {
+            positions[i++] = phi.valueAt(end).getNodeSourcePosition();
+        }
+
+
+        jump.setPhiValues(values, positions);
         append(jump);
     }
 

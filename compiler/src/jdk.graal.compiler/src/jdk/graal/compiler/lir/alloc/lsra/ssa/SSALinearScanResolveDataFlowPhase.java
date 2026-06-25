@@ -41,6 +41,8 @@ import jdk.graal.compiler.lir.alloc.lsra.LinearScanResolveDataFlowPhase;
 import jdk.graal.compiler.lir.alloc.lsra.MoveResolver;
 import jdk.graal.compiler.lir.ssa.SSAUtil;
 import jdk.graal.compiler.lir.ssa.SSAUtil.PhiValueVisitor;
+import jdk.graal.compiler.graph.NodeSourcePosition;
+
 
 import jdk.vm.ci.meta.Value;
 
@@ -67,7 +69,10 @@ class SSALinearScanResolveDataFlowPhase extends LinearScanResolveDataFlowPhase {
             int phiOutId = midBlock != null ? fromBlockLastInstructionId : instructions.get(phiOutIdx).id();
             assert phiOutId >= 0 : phiOutId;
 
+            jdk.graal.compiler.lir.StandardOp.JumpOp jmp = SSAUtil.phiOut(allocator.getLIR(), phiOutBlock);
+
             PhiValueVisitor visitor = new PhiValueVisitor() {
+                private int phiIdx = 0;
 
                 @Override
                 public void visit(Value phiIn, Value phiOut) {
@@ -75,18 +80,19 @@ class SSALinearScanResolveDataFlowPhase extends LinearScanResolveDataFlowPhase {
                     assert !isRegister(phiIn) : "phiIn is a register: " + phiIn;
                     Interval toInterval = allocator.splitChildAtOpId(allocator.intervalFor(phiIn), toBlockFirstInstructionId, LIRInstruction.OperandMode.DEF);
                     DebugContext debug = allocator.getDebug();
+                    NodeSourcePosition pos = jmp.getOutgoingPosition(phiIdx++);
                     if (isConstantValue(phiOut)) {
                         numPhiResolutionMoves.increment(debug);
-                        moveResolver.addMapping(asConstant(phiOut), toInterval);
+                        moveResolver.addMapping(asConstant(phiOut), toInterval, pos);
                     } else {
                         Interval fromInterval = allocator.splitChildAtOpId(allocator.intervalFor(phiOut), phiOutId, LIRInstruction.OperandMode.DEF);
                         if (fromInterval != toInterval && !fromInterval.location().equals(toInterval.location())) {
                             numPhiResolutionMoves.increment(debug);
                             if (!(isStackSlotValue(toInterval.location()) && isStackSlotValue(fromInterval.location()))) {
-                                moveResolver.addMapping(fromInterval, toInterval);
+                                moveResolver.addMapping(fromInterval, toInterval, pos);
                             } else {
                                 numStackToStackMoves.increment(debug);
-                                moveResolver.addMapping(fromInterval, toInterval);
+                                moveResolver.addMapping(fromInterval, toInterval, pos);
                             }
                         }
                     }

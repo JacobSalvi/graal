@@ -54,6 +54,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+<<<<<<< HEAD
+=======
+import com.oracle.svm.core.src.com.oracle.svm.core.graal.phases.IfNodeCreationCapturePhase;
+import com.oracle.svm.core.src.com.oracle.svm.core.graal.phases.IfNodeMatchPhase;
+import com.oracle.svm.core.src.com.oracle.svm.core.graal.phases.LoopBeginCapturePhase;
+>>>>>>> 8683f2af83c (Befor merging.)
 import org.graalvm.collections.EconomicSet;
 import org.graalvm.nativeimage.ImageInfo;
 import org.graalvm.nativeimage.ImageSingletons;
@@ -1776,6 +1782,11 @@ public class NativeImageGenerator {
         PhaseSuite<HighTierContext> highTier = suites.getHighTier();
         PhaseSuite<MidTierContext> midTier = suites.getMidTier();
         PhaseSuite<LowTierContext> lowTier = suites.getLowTier();
+
+
+        highTier.prependPhase(new IfNodeCreationCapturePhase());
+//        highTier.addBeforeLast(new LoopBeginCapturePhase());
+        lowTier.addBeforeLast(new IfNodeMatchPhase());
 
         final boolean economy = firstTier || fallback || SubstrateOptions.useEconomyCompilerConfig();
 

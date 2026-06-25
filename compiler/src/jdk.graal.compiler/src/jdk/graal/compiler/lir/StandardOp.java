@@ -36,6 +36,7 @@ import jdk.graal.compiler.debug.Assertions;
 import jdk.graal.compiler.debug.GraalError;
 import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
 import jdk.graal.compiler.lir.framemap.FrameMap;
+import jdk.graal.compiler.graph.NodeSourcePosition;
 import jdk.vm.ci.code.Register;
 import jdk.vm.ci.code.RegisterSaveLayout;
 import jdk.vm.ci.meta.AllocatableValue;
@@ -190,6 +191,9 @@ public class StandardOp {
         public static final LIRInstructionClass<JumpOp> TYPE = LIRInstructionClass.create(JumpOp.class);
 
         @Alive({OperandFlag.REG, OperandFlag.STACK, OperandFlag.CONST, OperandFlag.OUTGOING}) private Value[] outgoingValues;
+        private NodeSourcePosition[] outgoingPositions;
+
+
 
         private final LabelRef destination;
         private final boolean isThreadedJump;
@@ -233,6 +237,21 @@ public class StandardOp {
             this.outgoingValues = values;
         }
 
+        public void setPhiValues(Value[] values, NodeSourcePosition[] positions){
+            assert this.outgoingValues.length == 0 : this.outgoingValues;
+            assert values != null;
+            this.outgoingValues = values;
+            this.outgoingPositions = positions;
+        }
+
+        public NodeSourcePosition getOutgoingPosition(int idx){
+            if(outgoingPositions == null){
+                return null;
+            }
+            assert idx < outgoingPositions.length;
+            return outgoingPositions[idx];
+        }
+
         public int getPhiSize() {
             return outgoingValues.length;
         }
@@ -244,6 +263,7 @@ public class StandardOp {
 
         public void clearOutgoingValues() {
             outgoingValues = Value.NO_VALUES;
+            outgoingPositions = new NodeSourcePosition[]{};
         }
 
         private boolean checkRange(int idx) {

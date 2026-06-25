@@ -403,8 +403,11 @@ class LinearScanWalker extends IntervalWalker {
         assert instructions.get(index).id() == opId : "error in calculation";
 
         // insert new instruction before instruction at position index
+        LIRInstruction op = instructions.get(index);
+        jdk.graal.compiler.graph.NodeSourcePosition pos = op.getPosition();
+
         moveResolver.moveInsertPosition(instructions, index);
-        moveResolver.addMapping(srcIt, dstIt);
+        moveResolver.addMapping(srcIt, dstIt, pos);
     }
 
     int findOptimalSplitPos(BasicBlock<?> minBlock, BasicBlock<?> maxBlock, int maxSplitPos) {

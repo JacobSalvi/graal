@@ -280,7 +280,7 @@ public final class GraalOptions {
     public static final OptionKey<Boolean> SpeculativeGuardMovement = new OptionKey<>(true);
 
     @Option(help = "Track the NodeSourcePosition.", type = OptionType.Debug)
-    public static final OptionKey<Boolean> TrackNodeSourcePosition = new OptionKey<>(false);
+    public static final OptionKey<Boolean> TrackNodeSourcePosition = new OptionKey<>(true);
 
     @Option(help = "Track source stack trace where a node was inserted into the graph.", type = OptionType.Debug)
     public static final OptionKey<Boolean> TrackNodeInsertion = new OptionKey<>(false);

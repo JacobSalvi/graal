@@ -1764,6 +1764,7 @@ public class NativeImage {
         }
 
         command.add(javaExecutable);
+        command.add("-agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=5005");
         command.add("-Djdk.graal.TrackNodeSourcePosition=true");
         command.add("@" + argFile);
         command.add(NativeImageGeneratorRunner.IMAGE_BUILDER_ARG_FILE_OPTION + builderArgFile);

@@ -1754,7 +1754,12 @@ public abstract class BytecodeParser extends CoreProvidersDelegate implements Gr
     }
 
     protected ValueNode genIfNode(LogicNode condition, FixedNode trueSuccessor, FixedNode falseSuccessor, BranchProbabilityData profileData) {
-        return new IfNode(condition, trueSuccessor, falseSuccessor, profileData);
+        NodeSourcePosition nsp = createBytecodePosition();
+        IfNode node = new IfNode(condition, trueSuccessor, falseSuccessor, profileData);
+//        trueSuccessor.setNodeSourcePosition(nsp);
+//        falseSuccessor.setNodeSourcePosition(nsp);
+        node.setNodeSourcePosition(nsp);
+        return node;
     }
 
     protected void genThrow() {

@@ -38,6 +38,9 @@ public class IfNodeCreationCapturePhase extends BasePhase<HighTierContext> {
                     StandardOpenOption.APPEND)) {
 
                 for (IfNode ifnode : graph.getNodes(IfNode.TYPE)) {
+                    if(ifnode.getNodeSourcePosition() == null){
+                        continue;
+                    }
 
                     writer.write("cond: " + ifnode.getNodeSourcePosition().rawToString());
                     writer.newLine();

@@ -891,7 +891,7 @@ public abstract class Node implements Cloneable, Formattable {
     }
 
     public void clearNodeSourcePosition() {
-        setNodeInfo(NodeSourcePosition.class, null);
+//        setNodeInfo(NodeSourcePosition.class, null);
     }
 
     public NodeInsertionStackTrace getInsertionPosition() {

@@ -303,7 +303,7 @@ public abstract class LIRGenerator extends CoreProvidersDelegate implements LIRG
         return reg.asValue(valueKind);
     }
 
-    NodeSourcePosition currentPosition;
+    public NodeSourcePosition currentPosition;
 
     public void setSourcePosition(NodeSourcePosition position) {
         currentPosition = position;

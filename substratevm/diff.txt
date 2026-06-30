@@ -1,0 +1,622 @@
+diff --git a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/core/gen/NodeLIRBuilder.java b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/core/gen/NodeLIRBuilder.java
+index 589ef5f6232..b76a492c3f0 100644
+--- a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/core/gen/NodeLIRBuilder.java
++++ b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/core/gen/NodeLIRBuilder.java
+@@ -39,6 +39,7 @@ import java.util.List;
+ import org.graalvm.collections.EconomicMap;
+ import org.graalvm.collections.UnmodifiableMapCursor;
+ 
++import jdk.graal.compiler.code.SourceMapping;
+ import jdk.graal.compiler.core.common.LIRKind;
+ import jdk.graal.compiler.core.common.calc.Condition;
+ import jdk.graal.compiler.core.common.cfg.BasicBlock;
+@@ -325,22 +326,38 @@ public abstract class NodeLIRBuilder implements NodeLIRBuilderTool, LIRGeneratio
+         for (PhiNode phi : merge.valuePhis()) {
+             ValueNode node = phi.valueAt(pred);
+             Value value = operand(node);
++
++            NodeSourcePosition pos = node.getNodeSourcePosition();
+             assert value != null;
+             if (isRegister(value)) {
+                 /*
+                  * Fixed register intervals are not allowed at block boundaries so we introduce a
+                  * new Variable.
+                  */
++                NodeSourcePosition oldPos = gen.currentPosition;
++                gen.setSourcePosition(pos);
+                 value = gen.emitMove(value);
++                gen.setSourcePosition(oldPos);
+             } else if (node.isConstant() && !gen.getSpillMoveFactory().allowConstantToStackMove(node.asConstant()) && !LIRKind.isValue(value)) {
+                 /*
+                  * Some constants are not allowed as inputs for PHIs in certain backends. Explicitly
+                  * create a copy of this value to force it into a register. The new variable is only
+                  * used in the PHI.
+                  */
++                NodeSourcePosition oldPos = gen.currentPosition;
++                gen.setSourcePosition(pos);
+                 Variable result = gen.newVariable(value.getValueKind());
+                 gen.emitMove(result, value);
+                 value = result;
++                gen.setSourcePosition(oldPos);
++            }else if(pos != null){
++                // It would make sense for the instructions produced by this node to be
++                // connected to its node source position.
++                NodeSourcePosition oldPos = gen.currentPosition;
++                gen.setSourcePosition(pos);
++                Variable move = gen.emitMove(value);
++                value = move;
++                gen.setSourcePosition(oldPos);
+             }
+             values.add(value);
+         }
+@@ -561,7 +578,16 @@ public abstract class NodeLIRBuilder implements NodeLIRBuilderTool, LIRGeneratio
+     public void visitEndNode(AbstractEndNode end) {
+         AbstractMergeNode merge = end.merge();
+         JumpOp jump = new JumpOp(getLIRBlock(merge), end instanceof LoopEndNode loopEndNode && loopEndNode.loopBegin().mayEmitThreadedCode());
+-        jump.setPhiValues(createPhiOut(merge, end));
++        Value[] values = createPhiOut(merge, end);
++
++        NodeSourcePosition[] positions = new NodeSourcePosition[values.length];
++        int i = 0;
++        for (PhiNode phi : merge.valuePhis()) {
++            positions[i++] = phi.valueAt(end).getNodeSourcePosition();
++        }
++
++
++        jump.setPhiValues(values, positions);
+         append(jump);
+     }
+ 
+diff --git a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/core/phases/HighTier.java b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/core/phases/HighTier.java
+index ef1d9e1dab5..c2e08dcba7e 100644
+--- a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/core/phases/HighTier.java
++++ b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/core/phases/HighTier.java
+@@ -94,9 +94,9 @@ public class HighTier extends BaseTier<HighTierContext> {
+             appendPhase(new LoopFullUnrollPhase(canonicalizer, loopPolicies));
+         }
+ 
+-        if (GraalOptions.LoopPeeling.getValue(options)) {
+-            appendPhase(new LoopPeelingPhase(loopPolicies, canonicalizer));
+-        }
++//        if (GraalOptions.LoopPeeling.getValue(options)) {
++//            appendPhase(new LoopPeelingPhase(loopPolicies, canonicalizer));
++//        }
+ 
+         if (GraalOptions.LoopUnswitch.getValue(options)) {
+             appendPhase(new LoopUnswitchingPhase(loopPolicies, canonicalizer));
+diff --git a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/graph/NodeSourcePosition.java b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/graph/NodeSourcePosition.java
+index 8e0743a3db9..68810958ddc 100644
+--- a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/graph/NodeSourcePosition.java
++++ b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/graph/NodeSourcePosition.java
+@@ -238,6 +238,29 @@ public class NodeSourcePosition extends BytecodePosition implements Iterable<Nod
+         return sb.toString();
+     }
+ 
++    public String rawToString(){
++        StringBuilder sb = new StringBuilder(100);
++        NodeSourcePosition pos = this;
++        while (pos != null) {
++            var a = pos.getMethod().asStackTraceElement(pos.getBCI());
++            sb.append(String.format("%s [%s] [%s %d] [bci: %d]", pos.getMethod(),
++                    pos.getMethod().getSignature(),
++                    a.getFileName(),
++                    a.getLineNumber(),
++                    pos.getBCI()));
++            // format(sb, pos);
++            if (pos.sourceLanguagePosition != null) {
++                sb.append(" source=" + pos.sourceLanguagePosition.toShortString());
++            }
++            pos = pos.getCaller();
++            if (pos != null) {
++                sb.append(",");
++            }
++        }
++        return sb.toString();
++
++    }
++
+     private static void format(StringBuilder sb, NodeSourcePosition pos) {
+         MetaUtil.appendLocation(sb.append("at "), pos.getMethod(), pos.getBCI());
+         if (pos.marker != None) {
+diff --git a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/StandardOp.java b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/StandardOp.java
+index bcdf65205f8..943a7c43d1a 100644
+--- a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/StandardOp.java
++++ b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/StandardOp.java
+@@ -36,6 +36,7 @@ import jdk.graal.compiler.debug.Assertions;
+ import jdk.graal.compiler.debug.GraalError;
+ import jdk.graal.compiler.lir.asm.CompilationResultBuilder;
+ import jdk.graal.compiler.lir.framemap.FrameMap;
++import jdk.graal.compiler.graph.NodeSourcePosition;
+ import jdk.vm.ci.code.Register;
+ import jdk.vm.ci.code.RegisterSaveLayout;
+ import jdk.vm.ci.meta.AllocatableValue;
+@@ -190,6 +191,9 @@ public class StandardOp {
+         public static final LIRInstructionClass<JumpOp> TYPE = LIRInstructionClass.create(JumpOp.class);
+ 
+         @Alive({OperandFlag.REG, OperandFlag.STACK, OperandFlag.CONST, OperandFlag.OUTGOING}) private Value[] outgoingValues;
++        private NodeSourcePosition[] outgoingPositions;
++
++
+ 
+         private final LabelRef destination;
+         private final boolean isThreadedJump;
+@@ -233,6 +237,21 @@ public class StandardOp {
+             this.outgoingValues = values;
+         }
+ 
++        public void setPhiValues(Value[] values, NodeSourcePosition[] positions){
++            assert this.outgoingValues.length == 0 : this.outgoingValues;
++            assert values != null;
++            this.outgoingValues = values;
++            this.outgoingPositions = positions;
++        }
++
++        public NodeSourcePosition getOutgoingPosition(int idx){
++            if(outgoingPositions == null){
++                return null;
++            }
++            assert idx < outgoingPositions.length;
++            return outgoingPositions[idx];
++        }
++
+         public int getPhiSize() {
+             return outgoingValues.length;
+         }
+@@ -244,6 +263,7 @@ public class StandardOp {
+ 
+         public void clearOutgoingValues() {
+             outgoingValues = Value.NO_VALUES;
++            outgoingPositions = new NodeSourcePosition[]{};
+         }
+ 
+         private boolean checkRange(int idx) {
+diff --git a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/LinearScanResolveDataFlowPhase.java b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/LinearScanResolveDataFlowPhase.java
+index ba68cf25049..b2ce14e7889 100644
+--- a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/LinearScanResolveDataFlowPhase.java
++++ b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/LinearScanResolveDataFlowPhase.java
+@@ -76,8 +76,12 @@ public class LinearScanResolveDataFlowPhase extends LinearScanAllocationPhase {
+             Interval toInterval = allocator.splitChildAtOpId(allocator.intervalFor(operandNum), toBlockFirstInstructionId, LIRInstruction.OperandMode.DEF);
+ 
+             if (fromInterval != toInterval && !fromInterval.location().equals(toInterval.location())) {
++                ArrayList<LIRInstruction> instructions = allocator.getLIR().getLIRforBlock(fromBlock);
++                LIRInstruction lastInstr = instructions.get(instructions.size() - 1);
++                jdk.graal.compiler.graph.NodeSourcePosition pos = lastInstr.getPosition();
++
+                 // need to insert move instruction
+-                moveResolver.addMapping(fromInterval, toInterval);
++                moveResolver.addMapping(fromInterval, toInterval, pos);
+             }
+         }
+     }
+diff --git a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/LinearScanWalker.java b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/LinearScanWalker.java
+index 8d9ecc19bf9..4112c881825 100644
+--- a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/LinearScanWalker.java
++++ b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/LinearScanWalker.java
+@@ -403,8 +403,11 @@ class LinearScanWalker extends IntervalWalker {
+         assert instructions.get(index).id() == opId : "error in calculation";
+ 
+         // insert new instruction before instruction at position index
++        LIRInstruction op = instructions.get(index);
++        jdk.graal.compiler.graph.NodeSourcePosition pos = op.getPosition();
++
+         moveResolver.moveInsertPosition(instructions, index);
+-        moveResolver.addMapping(srcIt, dstIt);
++        moveResolver.addMapping(srcIt, dstIt, pos);
+     }
+ 
+     int findOptimalSplitPos(BasicBlock<?> minBlock, BasicBlock<?> maxBlock, int maxSplitPos) {
+diff --git a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/MoveResolver.java b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/MoveResolver.java
+index c99d8a2025c..718768b6b56 100644
+--- a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/MoveResolver.java
++++ b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/MoveResolver.java
+@@ -41,6 +41,8 @@ import jdk.graal.compiler.debug.CounterKey;
+ import jdk.graal.compiler.debug.DebugContext;
+ import jdk.graal.compiler.debug.GraalError;
+ import jdk.graal.compiler.debug.Indent;
++import jdk.graal.compiler.graph.NodeSourcePosition;
++
+ 
+ import jdk.vm.ci.meta.AllocatableValue;
+ import jdk.vm.ci.meta.Constant;
+@@ -69,6 +71,7 @@ public class MoveResolver {
+     private final ArrayList<Interval> mappingFrom;
+     private final ArrayList<Constant> mappingFromOpr;
+     private final ArrayList<Interval> mappingTo;
++    private final ArrayList<NodeSourcePosition> mappingPos;
+     private boolean multipleReadsAllowed;
+     private final int[] registerBlocked;
+ 
+@@ -120,6 +123,7 @@ public class MoveResolver {
+         this.insertionBuffer = new LIRInsertionBuffer();
+         this.registerBlocked = new int[allocator.getRegisters().size()];
+         this.res = allocator.getLIRGenerationResult();
++        this.mappingPos = new ArrayList<>();
+     }
+ 
+     protected boolean checkEmpty() {
+@@ -275,12 +279,15 @@ public class MoveResolver {
+         insertIdx = -1;
+     }
+ 
+-    private LIRInstruction insertMove(Interval fromInterval, Interval toInterval) {
++    private LIRInstruction insertMove(Interval fromInterval, Interval toInterval, NodeSourcePosition pos) {
+         assert !fromInterval.operand.equals(toInterval.operand) : "from and to interval equal: " + fromInterval;
+         assert LIRKind.verifyMoveKinds(toInterval.kind(), fromInterval.kind(), allocator.getRegisterAllocationConfig()) : "move between different types";
+         assert insertIdx != -1 : "must setup insert position first";
+ 
+         LIRInstruction move = createMove(fromInterval.operand, toInterval.operand, fromInterval.location(), toInterval.location());
++        if(pos!=null){
++            move.setPosition(pos);
++        }
+         insertionBuffer.append(insertIdx, move);
+ 
+         DebugContext debug = allocator.getDebug();
+@@ -301,7 +308,7 @@ public class MoveResolver {
+         return getAllocator().getSpillMoveFactory().createMove(toOpr, fromOpr);
+     }
+ 
+-    private LIRInstruction insertMove(Constant fromOpr, Interval toInterval) {
++    private LIRInstruction insertMove(Constant fromOpr, Interval toInterval, NodeSourcePosition pos) {
+         assert insertIdx != -1 : "must setup insert position first";
+ 
+         AllocatableValue toOpr = toInterval.operand;
+@@ -311,6 +318,9 @@ public class MoveResolver {
+         } else {
+             move = getAllocator().getSpillMoveFactory().createLoad(toOpr, fromOpr);
+         }
++        if(pos!=null){
++            move.setPosition(pos);
++        }
+         insertionBuffer.append(insertIdx, move);
+ 
+         DebugContext debug = allocator.getDebug();
+@@ -348,15 +358,16 @@ public class MoveResolver {
+                 for (i = mappingFrom.size() - 1; i >= 0; i--) {
+                     Interval fromInterval = mappingFrom.get(i);
+                     Interval toInterval = mappingTo.get(i);
++                    NodeSourcePosition pos = mappingPos.get(i);
+ 
+                     if (safeToProcessMove(fromInterval, toInterval)) {
+                         // this interval can be processed because target is free
+                         final LIRInstruction move;
+                         if (fromInterval != null) {
+-                            move = insertMove(fromInterval, toInterval);
++                            move = insertMove(fromInterval, toInterval, pos);
+                             unblockRegisters(fromInterval);
+                         } else {
+-                            move = insertMove(mappingFromOpr.get(i), toInterval);
++                            move = insertMove(mappingFromOpr.get(i), toInterval, pos);
+                         }
+                         move.setComment(res, "MoveResolver resolve mapping");
+                         if (LIRValueUtil.isStackSlotValue(toInterval.location())) {
+@@ -368,6 +379,7 @@ public class MoveResolver {
+                         mappingFrom.remove(i);
+                         mappingFromOpr.remove(i);
+                         mappingTo.remove(i);
++                        mappingPos.remove(i);
+ 
+                         processedInterval = true;
+                     } else if (fromInterval != null && isRegister(fromInterval.location()) &&
+@@ -429,7 +441,8 @@ public class MoveResolver {
+         blockRegisters(spillInterval);
+ 
+         // insert a move from register to stack and update the mapping
+-        LIRInstruction move = insertMove(fromInterval, spillInterval);
++        NodeSourcePosition pos = mappingPos.get(spillCandidate);
++        LIRInstruction move = insertMove(fromInterval, spillInterval, pos);
+         mappingFrom.set(spillCandidate, spillInterval);
+         unblockRegisters(fromInterval);
+         move.setComment(res, "MoveResolver break cycle");
+@@ -477,7 +490,7 @@ public class MoveResolver {
+         this.insertIdx = newInsertIdx;
+     }
+ 
+-    public void addMapping(Interval fromInterval, Interval toInterval) {
++    public void addMapping(Interval fromInterval, Interval toInterval, NodeSourcePosition pos) {
+         DebugContext debug = allocator.getDebug();
+         if (isIllegal(toInterval.location()) && toInterval.canMaterialize()) {
+             if (debug.isLogEnabled()) {
+@@ -488,7 +501,7 @@ public class MoveResolver {
+         if (isIllegal(fromInterval.location()) && fromInterval.canMaterialize()) {
+             // Instead of a reload, re-materialize the value
+             Constant rematValue = fromInterval.getMaterializedValue();
+-            addMapping(rematValue, toInterval);
++            addMapping(rematValue, toInterval, pos);
+             return;
+         }
+         if (debug.isLogEnabled()) {
+@@ -502,9 +515,10 @@ public class MoveResolver {
+         mappingFrom.add(fromInterval);
+         mappingFromOpr.add(null);
+         mappingTo.add(toInterval);
++        mappingPos.add(pos);
+     }
+ 
+-    public void addMapping(Constant fromOpr, Interval toInterval) {
++    public void addMapping(Constant fromOpr, Interval toInterval, NodeSourcePosition pos) {
+         DebugContext debug = allocator.getDebug();
+         if (debug.isLogEnabled()) {
+             debug.log("add move mapping from %s to %s", fromOpr, toInterval);
+@@ -513,6 +527,7 @@ public class MoveResolver {
+         mappingFrom.add(null);
+         mappingFromOpr.add(fromOpr);
+         mappingTo.add(toInterval);
++        mappingPos.add(pos);
+     }
+ 
+     void resolveAndAppendMoves() {
+diff --git a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/ssa/SSALinearScanResolveDataFlowPhase.java b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/ssa/SSALinearScanResolveDataFlowPhase.java
+index 4e0527b991d..7f9ba49f423 100644
+--- a/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/ssa/SSALinearScanResolveDataFlowPhase.java
++++ b/compiler/src/jdk.graal.compiler/src/jdk/graal/compiler/lir/alloc/lsra/ssa/SSALinearScanResolveDataFlowPhase.java
+@@ -41,6 +41,8 @@ import jdk.graal.compiler.lir.alloc.lsra.LinearScanResolveDataFlowPhase;
+ import jdk.graal.compiler.lir.alloc.lsra.MoveResolver;
+ import jdk.graal.compiler.lir.ssa.SSAUtil;
+ import jdk.graal.compiler.lir.ssa.SSAUtil.PhiValueVisitor;
++import jdk.graal.compiler.graph.NodeSourcePosition;
++
+ 
+ import jdk.vm.ci.meta.Value;
+ 
+@@ -67,7 +69,10 @@ class SSALinearScanResolveDataFlowPhase extends LinearScanResolveDataFlowPhase {
+             int phiOutId = midBlock != null ? fromBlockLastInstructionId : instructions.get(phiOutIdx).id();
+             assert phiOutId >= 0 : phiOutId;
+ 
++            jdk.graal.compiler.lir.StandardOp.JumpOp jmp = SSAUtil.phiOut(allocator.getLIR(), phiOutBlock);
++
+             PhiValueVisitor visitor = new PhiValueVisitor() {
++                private int phiIdx = 0;
+ 
+                 @Override
+                 public void visit(Value phiIn, Value phiOut) {
+@@ -75,18 +80,19 @@ class SSALinearScanResolveDataFlowPhase extends LinearScanResolveDataFlowPhase {
+                     assert !isRegister(phiIn) : "phiIn is a register: " + phiIn;
+                     Interval toInterval = allocator.splitChildAtOpId(allocator.intervalFor(phiIn), toBlockFirstInstructionId, LIRInstruction.OperandMode.DEF);
+                     DebugContext debug = allocator.getDebug();
++                    NodeSourcePosition pos = jmp.getOutgoingPosition(phiIdx++);
+                     if (isConstantValue(phiOut)) {
+                         numPhiResolutionMoves.increment(debug);
+-                        moveResolver.addMapping(asConstant(phiOut), toInterval);
++                        moveResolver.addMapping(asConstant(phiOut), toInterval, pos);
+                     } else {
+                         Interval fromInterval = allocator.splitChildAtOpId(allocator.intervalFor(phiOut), phiOutId, LIRInstruction.OperandMode.DEF);
+                         if (fromInterval != toInterval && !fromInterval.location().equals(toInterval.location())) {
+                             numPhiResolutionMoves.increment(debug);
+                             if (!(isStackSlotValue(toInterval.location()) && isStackSlotValue(fromInterval.location()))) {
+-                                moveResolver.addMapping(fromInterval, toInterval);
++                                moveResolver.addMapping(fromInterval, toInterval, pos);
+                             } else {
+                                 numStackToStackMoves.increment(debug);
+-                                moveResolver.addMapping(fromInterval, toInterval);
++                                moveResolver.addMapping(fromInterval, toInterval, pos);
+                             }
+                         }
+                     }
+diff --git a/substratevm/src/com.oracle.svm.core/src/com/oracle/svm/core/code/CompilationResultFrameTree.java b/substratevm/src/com.oracle.svm.core/src/com/oracle/svm/core/code/CompilationResultFrameTree.java
+index beb57656bf4..33e5187c440 100644
+--- a/substratevm/src/com.oracle.svm.core/src/com/oracle/svm/core/code/CompilationResultFrameTree.java
++++ b/substratevm/src/com.oracle.svm.core/src/com/oracle/svm/core/code/CompilationResultFrameTree.java
+@@ -494,10 +494,43 @@ public final class CompilationResultFrameTree {
+                     }
+                 }
+                 if (useSourceMappings) {
+-                    for (SourceMapping sourceMapping : sourceMappings) {
+-                        SourceMappingWrapper wrapper = SourceMappingWrapper.create(sourceMapping, maxDepth);
+-                        if (wrapper != null) {
+-                            if (wrapper.getStartOffset() > targetCodeSize - 1) {
++                    Path path = Paths.get("source_mapping.txt");
++
++                    try (BufferedWriter writer = Files.newBufferedWriter(path,
++                            StandardOpenOption.CREATE,
++                            StandardOpenOption.APPEND)) {
++
++                        for (SourceMapping sourceMapping : sourceMappings) {
++                            StringBuilder sb = new StringBuilder();
++                            for (int i = sourceMapping.getStartOffset(); i < sourceMapping.getEndOffset(); i++) {
++                                int b = compilationResult.getTargetCode()[i] & 0xFF;
++                                sb.append(String.format("%02x", b));
++                                sb.append(" ");
++                            }
++                            if(sb.isEmpty()){
++                                continue;
++                            }
++                            writer.write(String.format("%d - %d", sourceMapping.getStartOffset(), sourceMapping.getEndOffset()));
++                            writer.write(",");
++                            writer.write(sb.toString());
++                            writer.write(",");
++                            writer.write(sourceMapping.getSourcePosition().rawToString());
++                            writer.write(",");
++                            writer.write(sourceMapping.getSourcePosition().getMethod().toString());
++                            writer.newLine();
++
++
++//                        System.out.println(sourceMapping.getStartOffset() + " " + sourceMapping.getEndOffset());
++                            SourceMappingWrapper wrapper = SourceMappingWrapper.create(sourceMapping, maxDepth);
++                            if (wrapper != null) {
++                                if (wrapper.getStartOffset() > targetCodeSize - 1) {
++                                    if (debug.isLogEnabled(DebugContext.DETAILED_LEVEL)) {
++                                        debug.log(" Discard SourceMapping outside code-range %s", SourceMappingWrapper.getSourceMappingString(sourceMapping));
++                                    }
++                                    continue;
++                                }
++                                sourcePosData.add(wrapper);
++                            } else {
+                                 if (debug.isLogEnabled(DebugContext.DETAILED_LEVEL)) {
+                                     debug.log(" Discard SourceMapping outside code-range %s", SourceMappingWrapper.getSourceMappingString(sourceMapping));
+                                 }
+diff --git a/substratevm/src/com.oracle.svm.core/src/com/oracle/svm/core/graal/phases/IfNodeCreationCapturePhase.java b/substratevm/src/com.oracle.svm.core/src/com/oracle/svm/core/graal/phases/IfNodeCreationCapturePhase.java
+new file mode 100644
+index 00000000000..8cbf450b282
+--- /dev/null
++++ b/substratevm/src/com.oracle.svm.core/src/com/oracle/svm/core/graal/phases/IfNodeCreationCapturePhase.java
+@@ -0,0 +1,62 @@
++package com.oracle.svm.core.src.com.oracle.svm.core.graal.phases;
++
++import java.io.BufferedWriter;
++import java.io.IOException;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.nio.file.Paths;
++import java.nio.file.StandardOpenOption;
++import java.util.HashMap;
++import java.util.Map;
++import java.util.Optional;
++
++import jdk.graal.compiler.nodes.IfNode;
++import jdk.graal.compiler.nodes.StructuredGraph;
++import jdk.graal.compiler.phases.tiers.HighTierContext;
++import jdk.graal.compiler.nodes.AbstractBeginNode;
++import jdk.graal.compiler.phases.BasePhase;
++
++
++public class IfNodeCreationCapturePhase extends BasePhase<HighTierContext> {
++    private final static Map<IfNode, AbstractBeginNode> nodeToTrue = new HashMap<>();
++    private final static Map<IfNode, AbstractBeginNode> nodeToFalse = new HashMap<>();
++    private static Path path = Paths.get("condition_mapping.txt");
++
++    @Override
++    public Optional<NotApplicable> notApplicableTo(jdk.graal.compiler.nodes.GraphState graphState) {
++        return ALWAYS_APPLICABLE;
++    }
++
++    private static final Object FILE_LOCK = new Object();
++
++    @Override
++    protected void run(StructuredGraph graph, HighTierContext context) {
++        synchronized (FILE_LOCK) {
++            try (BufferedWriter writer = Files.newBufferedWriter(
++                    path,
++                    StandardOpenOption.CREATE,
++                    StandardOpenOption.APPEND)) {
++
++                for (IfNode ifnode : graph.getNodes(IfNode.TYPE)) {
++
++                    writer.write("cond: " + ifnode.getNodeSourcePosition().rawToString());
++                    writer.newLine();
++
++                    writer.write("true: " + ifnode.trueSuccessor().getNodeSourcePosition().rawToString());
++                    writer.newLine();
++
++                    writer.write("false: " + ifnode.falseSuccessor().getNodeSourcePosition().rawToString());
++                    writer.newLine();
++
++                    writer.write("--------------------------------------");
++                    writer.newLine();
++                }
++
++            } catch (IOException e) {
++                e.printStackTrace();
++            }
++        }
++    }
++
++
++}
+diff --git a/substratevm/src/com.oracle.svm.core/src/com/oracle/svm/core/graal/phases/IfNodeMatchPhase.java b/substratevm/src/com.oracle.svm.core/src/com/oracle/svm/core/graal/phases/IfNodeMatchPhase.java
+new file mode 100644
+index 00000000000..d2ea080ebff
+--- /dev/null
++++ b/substratevm/src/com.oracle.svm.core/src/com/oracle/svm/core/graal/phases/IfNodeMatchPhase.java
+@@ -0,0 +1,21 @@
++package com.oracle.svm.core.src.com.oracle.svm.core.graal.phases;
++
++import jdk.graal.compiler.nodes.StructuredGraph;
++import jdk.graal.compiler.phases.tiers.LowTierContext;
++import jdk.graal.compiler.nodes.IfNode;
++import jdk.graal.compiler.nodes.StructuredGraph;
++import jdk.graal.compiler.phases.tiers.HighTierContext;
++import jdk.graal.compiler.nodes.AbstractBeginNode;
++import jdk.graal.compiler.phases.BasePhase;
++
++
++public class IfNodeMatchPhase extends jdk.graal.compiler.phases.BasePhase<jdk.graal.compiler.phases.tiers.LowTierContext> {
++    @Override
++    protected void run(StructuredGraph graph, LowTierContext context) {
++        for(IfNode ifnode : graph.getNodes(IfNode.TYPE)) {
++            AbstractBeginNode falseSuccessor = ifnode.falseSuccessor();
++            AbstractBeginNode trueSuccessor = ifnode.trueSuccessor();
++//            System.out.println(ifnode.getNodeSourcePosition());
++        }
++    }
++}
+diff --git a/substratevm/src/com.oracle.svm.core/src/com/oracle/svm/core/graal/phases/LoopBeginCapturePhase.java b/substratevm/src/com.oracle.svm.core/src/com/oracle/svm/core/graal/phases/LoopBeginCapturePhase.java
+new file mode 100644
+index 00000000000..ce9195ce98b
+--- /dev/null
++++ b/substratevm/src/com.oracle.svm.core/src/com/oracle/svm/core/graal/phases/LoopBeginCapturePhase.java
+@@ -0,0 +1,46 @@
++package com.oracle.svm.core.src.com.oracle.svm.core.graal.phases;
++
++import java.io.BufferedWriter;
++import java.io.IOException;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.nio.file.Paths;
++import java.nio.file.StandardOpenOption;
++import java.util.HashMap;
++import java.util.Map;
++import java.util.Optional;
++
++public class LoopBeginCapturePhase extends jdk.graal.compiler.phases.BasePhase<jdk.graal.compiler.phases.tiers.HighTierContext> {
++    private final static Map<jdk.graal.compiler.nodes.IfNode, jdk.graal.compiler.nodes.AbstractBeginNode> nodeToTrue = new HashMap<>();
++    private final static Map<jdk.graal.compiler.nodes.IfNode, jdk.graal.compiler.nodes.AbstractBeginNode> nodeToFalse = new HashMap<>();
++    private static Path path = Paths.get("loop_begin.txt");
++
++    @Override
++    public Optional<NotApplicable> notApplicableTo(jdk.graal.compiler.nodes.GraphState graphState) {
++        return ALWAYS_APPLICABLE;
++    }
++
++
++    @Override
++    protected void run(jdk.graal.compiler.nodes.StructuredGraph graph, jdk.graal.compiler.phases.tiers.HighTierContext context) {
++        try (BufferedWriter writer = Files.newBufferedWriter(
++                path,
++                StandardOpenOption.CREATE,
++                StandardOpenOption.APPEND)) {
++
++            for (jdk.graal.compiler.nodes.LoopBeginNode lb : graph.getNodes(jdk.graal.compiler.nodes.LoopBeginNode.TYPE)) {
++                int uf = lb.getUnrollFactor();
++                int p = lb.peelings();
++
++                writer.write(String.format("%s [%d, %d]", lb.getNodeSourcePosition().rawToString(), uf, p));
++                writer.newLine();
++            }
++
++        } catch (IOException e) {
++            e.printStackTrace();
++        }
++    }
++
++
++}
++
+diff --git a/substratevm/src/com.oracle.svm.hosted/src/com/oracle/svm/hosted/NativeImageGenerator.java b/substratevm/src/com.oracle.svm.hosted/src/com/oracle/svm/hosted/NativeImageGenerator.java
+index 8b1b556f554..b2445c91da3 100644
+--- a/substratevm/src/com.oracle.svm.hosted/src/com/oracle/svm/hosted/NativeImageGenerator.java
++++ b/substratevm/src/com.oracle.svm.hosted/src/com/oracle/svm/hosted/NativeImageGenerator.java
+@@ -54,6 +54,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.function.Function;
+ import java.util.stream.Collectors;
+ 
++<<<<<<< HEAD
++=======
++import com.oracle.svm.core.src.com.oracle.svm.core.graal.phases.IfNodeCreationCapturePhase;
++import com.oracle.svm.core.src.com.oracle.svm.core.graal.phases.IfNodeMatchPhase;
++import com.oracle.svm.core.src.com.oracle.svm.core.graal.phases.LoopBeginCapturePhase;
++>>>>>>> 8683f2af83c (Befor merging.)
+ import org.graalvm.collections.EconomicSet;
+ import org.graalvm.nativeimage.ImageInfo;
+ import org.graalvm.nativeimage.ImageSingletons;
+@@ -1777,6 +1783,11 @@ public class NativeImageGenerator {
+         PhaseSuite<MidTierContext> midTier = suites.getMidTier();
+         PhaseSuite<LowTierContext> lowTier = suites.getLowTier();
+ 
++
++        highTier.prependPhase(new IfNodeCreationCapturePhase());
++//        highTier.addBeforeLast(new LoopBeginCapturePhase());
++        lowTier.addBeforeLast(new IfNodeMatchPhase());
++
+         final boolean economy = firstTier || fallback || SubstrateOptions.useEconomyCompilerConfig();
+ 
+         ListIterator<BasePhase<? super HighTierContext>> position;

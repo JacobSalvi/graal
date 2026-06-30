@@ -25,6 +25,11 @@
 
 package com.oracle.svm.core.code;
 
+import java.io.BufferedWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -494,6 +499,7 @@ public final class CompilationResultFrameTree {
                     }
                 }
                 if (useSourceMappings) {
+                    synchronized (CompilationResultFrameTree.class){
                     Path path = Paths.get("source_mapping.txt");
 
                     try (BufferedWriter writer = Files.newBufferedWriter(path,
@@ -534,14 +540,9 @@ public final class CompilationResultFrameTree {
                                 if (debug.isLogEnabled(DebugContext.DETAILED_LEVEL)) {
                                     debug.log(" Discard SourceMapping outside code-range %s", SourceMappingWrapper.getSourceMappingString(sourceMapping));
                                 }
-                                continue;
-                            }
-                            sourcePosData.add(wrapper);
-                        } else {
-                            if (debug.isLogEnabled(DebugContext.DETAILED_LEVEL)) {
-                                debug.log(" Discard SourceMapping %s", SourceMappingWrapper.getSourceMappingString(sourceMapping));
                             }
                         }
+                    }
                     }
                 }
 

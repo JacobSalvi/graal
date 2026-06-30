@@ -603,7 +603,7 @@ public final class HostedMethod extends HostedElement implements SharedMethod, W
 
     @Override
     public String toString() {
-        return "HostedMethod<" + format("%h.%n") + " -> " + wrapped.toString() + ">";
+        return uniqueShortName;
     }
 
     @Override

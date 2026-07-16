@@ -50,7 +50,14 @@ public class IfNodeCreationCapturePhase extends BasePhase<HighTierContext> {
 
                     writer.write("false: " + ifnode.falseSuccessor().getNodeSourcePosition().rawToString());
                     writer.newLine();
-
+                    jdk.graal.compiler.nodes.FixedNode lastNode=null;
+                    for (jdk.graal.compiler.nodes.FixedNode node : ifnode.falseSuccessor().getBlockNodes()) {
+                        lastNode = node;
+                    }
+                    if(lastNode!= null && lastNode.getNodeSourcePosition()!=null){
+                        writer.write("end: " + lastNode.getNodeSourcePosition().getBCI());
+                        writer.newLine();
+                    }
                     writer.write("--------------------------------------");
                     writer.newLine();
                 }

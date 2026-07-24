@@ -6,9 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardOpenOption;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
+import java.util.*;
 
 import jdk.graal.compiler.nodes.IfNode;
 import jdk.graal.compiler.nodes.StructuredGraph;
@@ -54,8 +52,11 @@ public class IfNodeCreationCapturePhase extends BasePhase<HighTierContext> {
                     for (jdk.graal.compiler.nodes.FixedNode node : ifnode.falseSuccessor().getBlockNodes()) {
                         lastNode = node;
                     }
+
+                    int lastTrueBCI = getLastBCI(ifnode.trueSuccessor(), ifnode.getNodeSourcePosition());
+                    int lastFalseBCI = getLastBCI(ifnode.falseSuccessor(), ifnode.getNodeSourcePosition());
                     if(lastNode!= null && lastNode.getNodeSourcePosition()!=null){
-                        writer.write("end: " + lastNode.getNodeSourcePosition().getBCI());
+                        writer.write("end: " + (Math.max(lastTrueBCI, lastFalseBCI)));
                         writer.newLine();
                     }
                     writer.write("--------------------------------------");
@@ -66,6 +67,28 @@ public class IfNodeCreationCapturePhase extends BasePhase<HighTierContext> {
                 e.printStackTrace();
             }
         }
+    }
+    /**
+     * Iterates through the block starting at {@code beginNode} and finds the last BCI
+     * that belongs to the same method as the original {@code IfNode}.
+     */
+    private int getLastBCI(AbstractBeginNode beginNode, jdk.graal.compiler.graph.NodeSourcePosition rootPosition) {
+        int lastBCI = -1;
+        for (jdk.graal.compiler.nodes.FixedNode node : beginNode.getBlockNodes()) {
+            jdk.graal.compiler.graph.NodeSourcePosition pos = node.getNodeSourcePosition();
+
+            // Traverse up the caller chain to find the method matching the IfNode
+            while (pos != null) {
+                if (Objects.equals(pos.getMethod(), rootPosition.getMethod())) {
+                    // Update lastBCI whenever we find a node that has a representation
+                    // in our target method (even if it's the caller of an inlined method).
+                    lastBCI = pos.getBCI();
+                    break;
+                }
+                pos = pos.getCaller();
+            }
+        }
+        return lastBCI;
     }
 
 

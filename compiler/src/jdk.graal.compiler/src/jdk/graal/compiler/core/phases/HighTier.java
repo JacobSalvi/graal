@@ -94,9 +94,9 @@ public class HighTier extends BaseTier<HighTierContext> {
             appendPhase(new LoopFullUnrollPhase(canonicalizer, loopPolicies));
         }
 
-//        if (GraalOptions.LoopPeeling.getValue(options)) {
-//            appendPhase(new LoopPeelingPhase(loopPolicies, canonicalizer));
-//        }
+        if (GraalOptions.LoopPeeling.getValue(options)) {
+            appendPhase(new LoopPeelingPhase(loopPolicies, canonicalizer));
+        }
 
         if (GraalOptions.LoopUnswitch.getValue(options)) {
             appendPhase(new LoopUnswitchingPhase(loopPolicies, canonicalizer));

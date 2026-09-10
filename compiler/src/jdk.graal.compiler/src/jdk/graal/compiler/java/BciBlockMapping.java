@@ -1067,7 +1067,7 @@ public class BciBlockMapping implements JavaMethodContext {
      * Retrieve the instruction block corresponding to this bci. The criteria for being an
      * instruction block is defined at BlockMap.isInstructionBlock.
      */
-    protected BciBlock getInstructionBlock(int bci) {
+    public BciBlock getInstructionBlock(int bci) {
         assert blockMap[bci].isInstructionBlock();
         return blockMap[bci];
     }

@@ -261,7 +261,7 @@ final class DeoptimizationTargetBciBlockMapping extends BciBlockMapping {
     }
 
     @Override
-    protected BciBlock getInstructionBlock(int bci) {
+    public BciBlock getInstructionBlock(int bci) {
         /*
          * DeoptBciBlocks are not instruction blocks; they only represent places where
          * DeoptEntryNodes and DeoptProxyAnchorNodes are to be inserted. For a given bci, if a
